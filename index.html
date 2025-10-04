@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebSerial GRBL Controller</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; }
+  button { margin: 5px; padding: 10px 20px; font-size: 16px; }
+  textarea { width: 100%; height: 150px; margin-top: 10px; }
+  .controls { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<h1>WebSerial GRBL Controller</h1>
+<div class="controls">
+  <button id="connect">Connect</button>
+  <button id="disconnect">Disconnect</button>
+</div>
+<div class="controls">
+  <button data-axis="X" data-dir="+">X+</button>
+  <button data-axis="X" data-dir="-">X-</button>
+  <button data-axis="Y" data-dir="+">Y+</button>
+  <button data-axis="Y" data-dir="-">Y-</button>
+  <button data-axis="Z" data-dir="+">Z+</button>
+  <button data-axis="Z" data-dir="-">Z-</button>
+</div>
+<div class="controls">
+  <textarea id="gcode" placeholder="Enter G-code here"></textarea>
+  <button id="sendGCode">Send G-code</button>
+</div>
+<div class="controls">
+  <input type="file" id="gcodeFile" accept=".gcode,.nc,.txt" />
+  <button id="sendFile">Wyślij plik G-code</button>
+</div>
+<div>
+  <h3>Output:</h3>
+  <pre id="output"></pre>
+</div>
+<script>
+let port;
+let writer;
+let reader;
+let keepReading = false;
+
+async function connect() {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
+    reader = port.readable.getReader();
+    keepReading = true;
+    readLoop();
+    log('Connected.');
+  } catch (err) {
+    log('Error: ' + err);
+  }
+}
+
+async function disconnect() {
+  keepReading = false;
+  if(reader) await reader.releaseLock();
+  if(writer) await writer.releaseLock();
+  if(port) await port.close();
+  log('Disconnected.');
+}
+
+async function readLoop() {
+  while(keepReading && port.readable) {
+    try {
+      const { value, done } = await reader.read();
+      if(done) break;
+      if(value) log(new TextDecoder().decode(value));
+    } catch(err) {
+      log('Read error: ' + err);
+      break;
+    }
+  }
+}
+
+async function sendCommand(cmd) {
+  if(!writer) { log('Not connected.'); return; }
+  await writer.write(new TextEncoder().encode(cmd + '\n'));
+  log('Sent: ' + cmd);
+}
+
+function log(msg) {
+  const output = document.getElementById('output');
+  output.textContent += msg + '\n';
+  output.scrollTop = output.scrollHeight;
+}
+
+document.getElementById('connect').addEventListener('click', connect);
+document.getElementById('disconnect').addEventListener('click', disconnect);
+
+document.querySelectorAll('button[data-axis]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const axis = btn.dataset.axis;
+    const dir = btn.dataset.dir;
+    const step = 1; // mm
+    const gcode = `G91\nG0 ${axis}${dir}${step}\nG90`; // relative move
+    sendCommand(gcode);
+  });
+});
+
+document.getElementById('sendGCode').addEventListener('click', () => {
+  const code = document.getElementById('gcode').value;
+  code.split('\n').forEach(line => {
+    if(line.trim()) sendCommand(line.trim());
+  });
+});
+
+document.getElementById('sendFile').addEventListener('click', () => {
+  const fileInput = document.getElementById('gcodeFile');
+  const file = fileInput.files[0];
+  if (!file) {
+    log("Nie wybrano pliku!");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    const lines = e.target.result.split(/\r?\n/);
+    for (const line of lines) {
+      if (line.trim()) {
+        await sendCommand(line.trim());
+        // Możesz dodać większy delay jeśli GRBL nie nadąża
+        await new Promise(r => setTimeout(r, 10));
+      }
+    }
+    log("Plik został wysłany.");
+  };
+  reader.readAsText(file);
+});
+</script>
+</body>
+</html>
